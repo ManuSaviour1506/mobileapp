@@ -1,4 +1,4 @@
-# Import the pose solution to get the landmark definitions
+# ml_service/analyzers/squat_analyzer.py
 from mediapipe.python.solutions import pose as mp_pose
 from .base_analyzer import BaseAnalyzer
 from .repetition_counter import RepetitionCounter
@@ -8,22 +8,21 @@ class SquatAnalyzer(BaseAnalyzer):
     """Analyzes squat performance for repetitions and form."""
 
     def analyze(self) -> dict:
-        # Indices for landmarks are now accessed from the imported pose solution
         hip = mp_pose.PoseLandmark.LEFT_HIP.value
         knee = mp_pose.PoseLandmark.LEFT_KNEE.value
         ankle = mp_pose.PoseLandmark.LEFT_ANKLE.value
         shoulder = mp_pose.PoseLandmark.LEFT_SHOULDER.value
 
-        # Initialize repetition counter
-        # Thresholds are based on normalized y-coordinates (0.0 top, 1.0 bottom)
         counter = RepetitionCounter(hip, enter_threshold=0.7, exit_threshold=0.6)
 
         min_knee_angle = 180.0
         max_back_angle = 0.0
         feedback_messages = []
 
-        # landmarks are a list of landmark objects
         for frame_landmarks in self.landmarks:
+            if not frame_landmarks or not frame_landmarks[hip] or not frame_landmarks[knee] or not frame_landmarks[ankle]:
+                continue
+            
             counter.update(frame_landmarks)
 
             # Calculate knee angle for depth
@@ -35,16 +34,19 @@ class SquatAnalyzer(BaseAnalyzer):
             min_knee_angle = min(min_knee_angle, knee_angle)
 
             # Calculate back angle (hip-shoulder relative to vertical) for posture
-            hip_y = frame_landmarks[hip].y
-            shoulder_y = frame_landmarks[shoulder].y
-            back_angle = abs(hip_y - shoulder_y) * 100 # Simple metric for lean
-            max_back_angle = max(max_back_angle, back_angle)
+            # Simplified approach: horizontal distance between hip and shoulder
+            hip_x = frame_landmarks[hip].x
+            shoulder_x = frame_landmarks[shoulder].x
+            back_lean_metric = abs(hip_x - shoulder_x) * 100 
+            max_back_lean_metric = max(max_back_angle, back_lean_metric)
 
 
         # Scoring and Feedback Logic
         reps = counter.count
-        depth_ok = min_knee_angle < 100 # Good depth is below 100 degrees
-        posture_ok = max_back_angle < 25 # Check for excessive forward lean
+        # Good depth is typically below 100 degrees
+        depth_ok = min_knee_angle < 100 
+        # Check for excessive forward lean
+        posture_ok = max_back_lean_metric < 5 
 
         if not depth_ok:
             feedback_messages.append("Try to go deeper to reach at least parallel.")
@@ -55,7 +57,8 @@ class SquatAnalyzer(BaseAnalyzer):
         else:
             feedback_messages.append(f"Great work on completing {reps} reps!")
 
-        score = (int(depth_ok) * 50) + (int(posture_ok) * 50)
+        score = (int(depth_ok) * 50) + (int(posture_ok) * 50) + (reps * 10)
+        score = min(100, score)
 
         return {
             "approved": score >= 75 and reps > 0,
@@ -64,7 +67,6 @@ class SquatAnalyzer(BaseAnalyzer):
             "metrics": {
                 "repetitions": reps,
                 "min_knee_angle": round(min_knee_angle, 2),
-                "max_forward_lean_metric": round(max_back_angle, 2)
+                "max_forward_lean_metric": round(max_back_lean_metric, 2)
             }
         }
-
